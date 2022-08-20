@@ -2,8 +2,8 @@ Nav2 Costmap 2D deadlock reproducing code
 https://github.com/ros-planning/navigation2/issues/3109
 
 # How does it reproduces the bug?
-- update costmap at 100Hz
-- publish a map with different origins at 100Hz
+- update costmap at 1000Hz
+- publish a map with different origins at 1000Hz
 
 # Launch
 - ros2 launch deadlock_test test-launcy.py

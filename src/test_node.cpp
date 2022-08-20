@@ -25,15 +25,16 @@ class Test : public nav2_util::LifecycleNode {
   nav2_util::CallbackReturn on_cleanup(const rclcpp_lifecycle::State &state) override;
   nav2_util::CallbackReturn on_shutdown(const rclcpp_lifecycle::State &state) override;
   void run_test();
-  void run_test_local();
-  void run_test_bag();
+  void run_check();
 
  private:
+  bool alive_;
   rclcpp::TimerBase::SharedPtr timer_;
   rclcpp::TimerBase::SharedPtr timer2_;
   nav_msgs::msg::OccupancyGrid map_;
   rclcpp_lifecycle::LifecyclePublisher<nav_msgs::msg::OccupancyGrid>::SharedPtr map_publisher_;
   std::unique_ptr<std::thread> thread_;
+  std::unique_ptr<std::thread> thread2_;
   std::shared_ptr<nav2_costmap_2d::Costmap2DROS> costmap_ros_;
   std::unique_ptr<nav2_util::NodeThread> costmap_thread_;
 };
@@ -48,8 +49,10 @@ int main(int argc, char **argv) {
 
 namespace deadlock_test {
 
-Test::Test(const rclcpp::NodeOptions &options) : nav2_util::LifecycleNode("deadlock_test", "", true, options) {
+Test::Test(const rclcpp::NodeOptions &options) : nav2_util::LifecycleNode("deadlock_test", "", options) {
   RCLCPP_INFO(get_logger(), "Creating");
+
+  alive_ = true;
 
   // Setup the global costmap
   costmap_ros_ =
@@ -80,6 +83,13 @@ nav2_util::CallbackReturn Test::on_activate(const rclcpp_lifecycle::State &state
     run_test();
   });
 
+  thread2_ = std::make_unique<std::thread>([&]() {
+    rclcpp::Rate r(1);
+    r.sleep();
+    RCLCPP_INFO(get_logger(), "run_check");
+    run_check();
+  });
+  
   return nav2_util::CallbackReturn::SUCCESS;
 }
 nav2_util::CallbackReturn Test::on_deactivate(const rclcpp_lifecycle::State &/*state*/) {
@@ -99,8 +109,6 @@ nav2_util::CallbackReturn Test::on_shutdown(const rclcpp_lifecycle::State &/*sta
 }
 
 void Test::run_test() {
-  bool alive_ = true;
-
   fs::path base_path = ament_index_cpp::get_package_share_directory("deadlock_test");
   base_path /= "test";
   fs::path map_path = base_path / "TenByTen.yaml";
@@ -112,16 +120,36 @@ void Test::run_test() {
     RCLCPP_INFO(get_logger(), "map file not found\n");
   }
 
-  rclcpp::Rate r(100);
+  rclcpp::Rate r(1000);
   int x = 0;
   int y = 0;
   while(alive_) {
-    RCLCPP_INFO(get_logger(), "publish map");
     x = (x+3)%19;
     y = (y+5)%19;
     map_.info.origin.position.x = x/10.0 - 5.0;
     map_.info.origin.position.y = y/10.0 - 5.0;
     map_publisher_->publish(map_);
+    r.sleep();
+  }
+}
+
+void Test::run_check() {
+  rclcpp::Rate r(10);
+  int count = 0;
+  while(alive_) {
+    RCLCPP_ERROR(get_logger(), "check deadlock");
+    std::unique_lock<std::recursive_mutex> lock(*(costmap_ros_->getCostmap()->getMutex()), std::defer_lock);
+    if (lock.try_lock()) {
+      lock.unlock();
+      count = 0;
+    } else {
+      count++;
+    }
+
+    if (count > 10) {
+      RCLCPP_ERROR(get_logger(), "costmap is deadlocked");
+      alive_ = false;
+    }
     r.sleep();
   }
 }
